@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Game Engine Builder</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { background: #0d1117; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <!-- React 18 + ReactDOM (UMD builds, available as globals) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+
+    <!-- Babel standalone – transforms JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!--
+      index.jsx uses ES-module "import { useState, ... } from 'react'" syntax.
+      Babel standalone doesn't resolve bare module specifiers, so we
+      remap them to the globals React already put on window.
+      The transform plugin below rewrites every import from "react" /
+      "react-dom" to a const pulled from the global instead.
+    -->
+    <script>
+      // Register a Babel plugin that turns:
+      //   import { useState } from "react"
+      // into:
+      //   const { useState } = window.React;
+      Babel.registerPlugin("rewrite-react-imports", function({ types: t }) {
+        return {
+          visitor: {
+            ImportDeclaration(path) {
+              const src = path.node.source.value;
+              let globalName = null;
+              if (src === "react")     globalName = "React";
+              if (src === "react-dom" || src === "react-dom/client") globalName = "ReactDOM";
+              if (!globalName) return;
+
+              const specifiers = path.node.specifiers.map(s => {
+                if (t.isImportDefaultSpecifier(s))
+                  return t.variableDeclarator(s.local, t.identifier(globalName));
+                if (t.isImportNamespaceSpecifier(s))
+                  return t.variableDeclarator(s.local, t.identifier(globalName));
+                // named: import { useState } → const { useState } = React
+                return t.variableDeclarator(
+                  t.objectPattern([t.objectProperty(s.imported, s.local, false, s.imported.name === s.local.name)]),
+                  t.identifier(globalName)
+                );
+              });
+
+              path.replaceWith(
+                t.variableDeclaration("const", specifiers)
+              );
+            },
+            // Turn `export default function App` → window.__App__ = App
+            ExportDefaultDeclaration(path) {
+              const decl = path.node.declaration;
+              if (t.isFunctionDeclaration(decl) || t.isClassDeclaration(decl)) {
+                const id = decl.id || path.scope.generateUidIdentifier("_default");
+                decl.id = id;
+                path.replaceWithMultiple([
+                  decl,
+                  t.expressionStatement(
+                    t.assignmentExpression("=",
+                      t.memberExpression(t.identifier("window"), t.identifier("__App__")),
+                      id
+                    )
+                  )
+                ]);
+              } else {
+                path.replaceWith(
+                  t.expressionStatement(
+                    t.assignmentExpression("=",
+                      t.memberExpression(t.identifier("window"), t.identifier("__App__")),
+                      decl
+                    )
+                  )
+                );
+              }
+            },
+          }
+        };
+      });
+    </script>
+
+    <!-- Load + transform index.jsx -->
+    <script type="text/babel"
+            data-plugins="rewrite-react-imports"
+            data-presets="react"
+            src="index.jsx">
+    </script>
+
+    <!-- Mount once Babel has finished -->
+    <script>
+      // Babel processes <script type="text/babel"> synchronously for inline scripts
+      // but async for src= scripts. Poll until __App__ is ready.
+      (function mount() {
+        if (window.__App__) {
+          ReactDOM.createRoot(document.getElementById("root"))
+                  .render(React.createElement(window.__App__));
+        } else {
+          setTimeout(mount, 50);
+        }
+      })();
+    </script>
+  </body>
+</html>
